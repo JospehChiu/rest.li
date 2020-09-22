@@ -16,6 +16,7 @@
 
 package com.linkedin.pegasus.generator;
 
+import com.linkedin.data.Data;
 import com.linkedin.data.schema.DataSchema;
 import com.linkedin.data.schema.DataSchemaLocation;
 import com.linkedin.data.schema.DataSchemaParserFactory;
@@ -28,16 +29,15 @@ import com.linkedin.data.schema.resolver.InJarFileDataSchemaLocation;
 import com.linkedin.data.schema.resolver.SchemaDirectoryName;
 import com.linkedin.internal.common.InternalConstants;
 import com.linkedin.util.FileUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
-import java.util.Collections;
-import java.util.Enumeration;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
@@ -50,11 +50,14 @@ import java.util.jar.JarFile;
  */
 public class FileFormatDataSchemaParser
 {
+  private static final Logger _log = LoggerFactory.getLogger(FileFormatDataSchemaParser.class);
+
   static final String SCHEMA_PATH_PREFIX = SchemaDirectoryName.PEGASUS.getName() + "/";
   static final String EXTENSION_PATH_ENTRY = SchemaDirectoryName.EXTENSIONS.getName() + "/";
   private final String _resolverPath;
   private final DataSchemaResolver _schemaResolver;
   private final DataSchemaParserFactory _schemaParserFactory;
+  private Integer duplicateInsert = 0;
 
   public FileFormatDataSchemaParser(String resolverPath, DataSchemaResolver schemaResolver, DataSchemaParserFactory schemaParserFactory)
   {
@@ -72,6 +75,7 @@ public class FileFormatDataSchemaParser
 
   void parseSources(String[] sources, DataSchemaParser.ParseResult result) throws IOException
   {
+    Map<DataSchema, DataSchemaLocation> tmpMap = new LinkedHashMap<>();
     try
     {
       for (String source : sources)
@@ -85,7 +89,7 @@ public class FileFormatDataSchemaParser
             final List<File> sourceFilesInDirectory = FileUtil.listFiles(sourceFile, filter);
             for (File f : sourceFilesInDirectory)
             {
-              parseFile(f, result);
+              parseFile(f, result, tmpMap);
               result.getSourceFiles().add(f);
             }
           }
@@ -102,14 +106,14 @@ public class FileFormatDataSchemaParser
                     entry.getName().endsWith(_schemaParserFactory.getLanguageExtension()) &&
                     (entry.getName().startsWith(_schemaResolver.getSchemasDirectoryName().getName() + "/")))
                 {
-                  parseJarEntry(jarFile, entry, result);
+                  parseJarEntry(jarFile, entry, result, tmpMap);
                   result.getSourceFiles().add(sourceFile);
                 }
               }
             }
             else
             {
-              parseFile(sourceFile, result);
+              parseFile(sourceFile, result, tmpMap);
               result.getSourceFiles().add(sourceFile);
             }
           }
@@ -136,8 +140,15 @@ public class FileFormatDataSchemaParser
 
       for (Map.Entry<String, DataSchemaLocation> entry : _schemaResolver.nameToDataSchemaLocations().entrySet()) {
         final DataSchema schema = _schemaResolver.bindings().get(entry.getKey());
-        result.getSchemaAndLocations().put(schema, entry.getValue());
+        if (tmpMap.containsKey(schema)) { duplicateInsert += 1; }
+        tmpMap.put(schema, entry.getValue());
       }
+
+      _log.info("-------------------------");
+      _log.info("Duplicate Insert: " + duplicateInsert);
+      _log.info("-------------------------");
+
+      result.getSchemaAndLocations().putAll(tmpMap);
     }
     catch (RuntimeException e)
     {
@@ -157,7 +168,7 @@ public class FileFormatDataSchemaParser
    * @param schemaSourceFile provides the source file.
    * @throws IOException if there is a file access error.
    */
-  private void parseFile(File schemaSourceFile, DataSchemaParser.ParseResult result)
+  private void parseFile(File schemaSourceFile, DataSchemaParser.ParseResult result, Map<DataSchema, DataSchemaLocation> tmpMap)
       throws IOException
   {
     final DataSchemaLocation location = getSchemaLocation(schemaSourceFile);
@@ -177,11 +188,13 @@ public class FileFormatDataSchemaParser
         validateSchemaWithPath(schemaSourceFile.getAbsolutePath(), (NamedDataSchema) schema);
       }
 
-      result.getSchemaAndLocations().put(schema, location);
+      if (tmpMap.containsKey(schema)) { duplicateInsert += 1; }
+      tmpMap.put(schema, location);
+//      result.getSchemaAndLocations().put(schema, location);
     }
   }
 
-  private void parseJarEntry(JarFile schemaJarFile, JarEntry jarEntry, DataSchemaParser.ParseResult result)
+  private void parseJarEntry(JarFile schemaJarFile, JarEntry jarEntry, DataSchemaParser.ParseResult result, Map<DataSchema, DataSchemaLocation> tmpMap)
       throws IOException
   {
     final DataSchemaLocation location = getSchemaLocation(schemaJarFile, jarEntry.getName());
@@ -200,7 +213,9 @@ public class FileFormatDataSchemaParser
         validateSchemaWithPath(location.toString(), (NamedDataSchema) schema);
       }
 
-      result.getSchemaAndLocations().put(schema, location);
+      if (tmpMap.containsKey(schema)) { duplicateInsert += 1; }
+      tmpMap.put(schema, location);
+//      result.getSchemaAndLocations().put(schema, location);
     }
   }
 
